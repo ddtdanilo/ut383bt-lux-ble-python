@@ -55,6 +55,9 @@ LOG_DIR = "logs"
 LOG_FILE_NAME = "synchronized_lux_data.csv"
 LOG_FILE_PATH = os.path.join(LOG_DIR, LOG_FILE_NAME)
 
+# Polynomial coefficients (a, b, c) for second-order model
+POLYNOMIAL_COEFFICIENTS = (0.002, 1.3, -5.0)  # Example coefficients
+
 # Shared variables for sensor readings
 latest_ble_lux = None
 latest_serial_lux = None
@@ -64,10 +67,11 @@ class LuxLogger:
     """
     Base class for logging LUX data to a CSV file.
     """
-    def __init__(self, log_file_path):
+    def __init__(self, log_file_path, polynomial_coefficients):
         self.log_file_path = log_file_path
         self.csv_file = None
         self.csv_writer = None
+        self.coefficients = polynomial_coefficients
 
     def setup_csv(self):
         # Ensure the logs directory exists
@@ -75,21 +79,30 @@ class LuxLogger:
             os.makedirs(LOG_DIR)
 
         # Open the CSV file for writing data
-        file_exists = os.path.isfile(self.log_file_path)
         self.csv_file = open(self.log_file_path, 'w', newline='')
         self.csv_writer = csv.writer(self.csv_file)
 
         # Write header
-        self.csv_writer.writerow(['timestamp', 'ble_lux_value', 'serial_lux_value'])
+        self.csv_writer.writerow(['timestamp', 'ble_lux_value', 'serial_lux_value', 'processed_serial_lux_value'])
 
     def close_csv(self):
         if self.csv_file:
             self.csv_file.close()
             print(f"Log file {self.log_file_path} closed.")
 
+    def process_serial_lux(self, serial_lux):
+        """
+        Processes the Serial LUX value using a second-order polynomial model.
+        """
+        if serial_lux is None:
+            return None
+        a, b, c = self.coefficients
+        return a * serial_lux**2 + b * serial_lux + c
+
     def log_data(self, timestamp, ble_lux, serial_lux):
+        processed_serial_lux = self.process_serial_lux(serial_lux)
         with data_lock:
-            self.csv_writer.writerow([timestamp, ble_lux, serial_lux])
+            self.csv_writer.writerow([timestamp, ble_lux, serial_lux, processed_serial_lux])
             self.csv_file.flush()  # Ensure data is written to file
 
 class SerialLuxReader(threading.Thread):
@@ -274,7 +287,7 @@ class BLELuxReader:
 
 async def main():
     # Create instances of the loggers and readers
-    logger = LuxLogger(log_file_path=LOG_FILE_PATH)
+    logger = LuxLogger(log_file_path=LOG_FILE_PATH, polynomial_coefficients=POLYNOMIAL_COEFFICIENTS)
     logger.setup_csv()
 
     serial_reader = SerialLuxReader(
@@ -314,8 +327,9 @@ async def main():
                 timestamp = time.time()
                 ble_lux = latest_ble_lux
                 serial_lux = latest_serial_lux
+            processed_serial_lux = logger.process_serial_lux(serial_lux)
             logger.log_data(timestamp, ble_lux, serial_lux)
-            print(f"Logged data at {timestamp}: BLE={ble_lux}, Serial={serial_lux}")
+            print(f"Logged data at {timestamp}: BLE={ble_lux}, Serial={serial_lux}, Processed Serial={processed_serial_lux}")
     except KeyboardInterrupt:
         print("Interrupted by user.")
     finally:
