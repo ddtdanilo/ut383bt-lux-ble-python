@@ -4,31 +4,19 @@
 Synchronized Lux Logger for BLE and Serial Sensors
 ==================================================
 
-This script connects to the Uni-T UT383BT Bluetooth LUX meter and a serial-connected LUX sensor,
-logs synchronized LUX values with timestamps (in epoch time) to a CSV file for later analysis.
+Este script:
+- Lee datos LUX desde un dispositivo BLE.
+- Lee datos LUX desde un sensor serial (que imprime línea con MUESTRA, LUX, FULL, IR, ITIME, GAIN, ATIME, AGAIN, CPL).
+- Las líneas seriales pueden indicar saturación con SATURADO y campos N/A.
+- Procesa el valor serial_lux con un modelo lineal por rangos.
+- Registra todo en un CSV.
+- El número de muestra (MUESTRA) ahora se extrae directamente de la línea serial, no se genera internamente.
 
-Features:
----------
-- Connects to the UT383BT LUX meter via BLE.
-- Connects to a LUX sensor via a serial port.
-- Reads and logs LUX values from both sensors.
-- Logs synchronized LUX values and timestamps to a single CSV file with separate columns for each sensor.
+Requisitos previos:
+- bleak
+- pySerial
 
-Usage:
-------
-- Run the script to start logging synchronized LUX values.
-- The data is saved in the 'logs' directory as 'synchronized_lux_data.csv'.
-
-Requirements:
--------------
-- Python 3.8 or higher.
-- bleak library for BLE communication.
-- pySerial library for serial communication.
-- Ensure that the device UUIDs and serial port match your devices.
-
-License:
---------
-This script is released under the "Do What The F*ck You Want To Public License" (Version 2).
+Asegúrate de reemplazar los UUID, el puerto serial y otros ajustes según tu hardware.
 """
 
 import asyncio
@@ -41,31 +29,40 @@ import serial
 from bleak import BleakClient
 
 # BLE configuration
-BLE_DEVICE_UUID = "F35544C1-2CF9-1C06-307B-3F9D1F8B5FBC"  # Replace with your BLE device's UUID
-DATA_IN_UUID = "0000ff01-0000-1000-8000-00805f9b34fb"     # BLE Data In characteristic UUID
-DATA_OUT_UUID = "0000ff02-0000-1000-8000-00805f9b34fb"    # BLE Data Out characteristic UUID
+BLE_DEVICE_UUID = "F35544C1-2CF9-1C06-307B-3F9D1F8B5FBC"  # Reemplaza con el UUID de tu dispositivo BLE
+DATA_IN_UUID = "0000ff01-0000-1000-8000-00805f9b34fb"    # Característica BLE Data In
+DATA_OUT_UUID = "0000ff02-0000-1000-8000-00805f9b34fb"   # Característica BLE Data Out
 
 # Serial port configuration
-SERIAL_PORT = "/dev/tty.usbserial-A50285BI"  # Replace with your serial port
-BAUD_RATE = 115200  # Adjust based on your device's baud rate
-SERIAL_TIMEOUT = 1       # Timeout for serial read in seconds
+SERIAL_PORT = "/dev/tty.usbserial-A50285BI"  # Reemplaza con tu puerto serial
+BAUD_RATE = 115200
+SERIAL_TIMEOUT = 1
 
 # Log file configuration
 LOG_DIR = "logs"
 LOG_FILE_NAME = "synchronized_lux_data.csv"
 LOG_FILE_PATH = os.path.join(LOG_DIR, LOG_FILE_NAME)
 
-# Polynomial coefficients (a, b, c) for second-order model
-POLYNOMIAL_COEFFICIENTS = (0.002, 1.3, -5.0)  # Example coefficients
+# Coeficientes para procesar el lux serial (modelo ya definido)
+POLYNOMIAL_COEFFICIENTS = (0.002, 1.3, -5.0)
 
-# Shared variables for sensor readings
+# Variables compartidas
 latest_ble_lux = None
+latest_muestra_id = None
 latest_serial_lux = None
-data_lock = threading.Lock()  # Lock to synchronize access to shared variables
+latest_full = None
+latest_ir = None
+latest_itime = None
+latest_gain = None
+latest_atime = None
+latest_again = None
+latest_cpl = None
+
+data_lock = threading.Lock()
 
 class LuxLogger:
     """
-    Base class for logging LUX data to a CSV file.
+    Clase para registrar datos en CSV con columnas adicionales.
     """
     def __init__(self, log_file_path, polynomial_coefficients):
         self.log_file_path = log_file_path
@@ -74,41 +71,37 @@ class LuxLogger:
         self.coefficients = polynomial_coefficients
 
     def setup_csv(self):
-        # Ensure the logs directory exists
         if not os.path.exists(LOG_DIR):
             os.makedirs(LOG_DIR)
-
-        # Open the CSV file for writing data
         self.csv_file = open(self.log_file_path, 'w', newline='')
         self.csv_writer = csv.writer(self.csv_file)
-
-        # Write header
-        self.csv_writer.writerow(['timestamp', 'ble_lux_value', 'serial_lux_value', 'processed_serial_lux_value'])
+        self.csv_writer.writerow([
+            'muestra_id',
+            'timestamp',
+            'ble_lux_value',
+            'serial_lux_value',
+            'processed_serial_lux_value',
+            'full',
+            'ir',
+            'itime',
+            'gain',
+            'atime',
+            'again',
+            'cpl'
+        ])
 
     def close_csv(self):
         if self.csv_file:
             self.csv_file.close()
             print(f"Log file {self.log_file_path} closed.")
 
-    # def process_serial_lux(self, serial_lux):
-    #     """
-    #     Processes the Serial LUX value using a second-order polynomial model.
-    #     """
-    #     if serial_lux is None:
-    #         return None
-    #     a, b, c = self.coefficients
-    #     return a * serial_lux**2 + b * serial_lux + c
     def process_serial_lux(self, x):
         """
-        Predice el valor de BLE Lux usando un modelo lineal basado en rangos definidos por clusters.
-
-        Parámetros:
-            x (float): Valor de Serial Lux.
-
-        Retorna:
-            float: Valor predicho de BLE Lux.
+        Procesa el lux serial con un modelo lineal por rangos.
+        Si x es None o fuera de rango, retorna None.
         """
-        # Coeficientes e interceptos por rango
+        if x is None:
+            return None
         if 0.0 <= x <= 217.51:  # Cluster 1
             coef = 2.2223
             intercept = 16.0177
@@ -119,19 +112,31 @@ class LuxLogger:
             coef = -0.1316
             intercept = 1686.7994
         else:
-            raise ValueError("El valor de Serial Lux está fuera de los rangos definidos por los clusters.")
-
+            return None
         return coef * x + intercept
 
-    def log_data(self, timestamp, ble_lux, serial_lux):
+    def log_data(self, muestra_id, timestamp, ble_lux, serial_lux, full, ir, itime, gain, atime, again, cpl):
         processed_serial_lux = self.process_serial_lux(serial_lux)
         with data_lock:
-            self.csv_writer.writerow([timestamp, ble_lux, serial_lux, processed_serial_lux])
-            self.csv_file.flush()  # Ensure data is written to file
+            self.csv_writer.writerow([
+                muestra_id,
+                timestamp,
+                ble_lux,
+                serial_lux,
+                processed_serial_lux,
+                full,
+                ir,
+                itime,
+                gain,
+                atime,
+                again,
+                cpl
+            ])
+            self.csv_file.flush()
 
 class SerialLuxReader(threading.Thread):
     """
-    Thread to handle reading from the serial port and updating the latest LUX value.
+    Hilo para leer del puerto serial y parsear tanto líneas normales como saturadas, incluyendo MUESTRA.
     """
     def __init__(self, port, baud_rate, timeout):
         threading.Thread.__init__(self)
@@ -142,9 +147,6 @@ class SerialLuxReader(threading.Thread):
         self.stop_event = threading.Event()
 
     def connect(self):
-        """
-        Connects to the serial port.
-        """
         try:
             self.serial_conn = serial.Serial(
                 port=self.port,
@@ -161,47 +163,96 @@ class SerialLuxReader(threading.Thread):
             return False
 
     def disconnect(self):
-        """
-        Closes the serial connection.
-        """
         if self.serial_conn and self.serial_conn.is_open:
             self.serial_conn.close()
             print(f"Disconnected from serial port: {self.port}")
 
     def run(self):
-        """
-        Reads lines from the serial port and updates the latest LUX value.
-        """
         try:
             while not self.stop_event.is_set():
                 raw_data = self.serial_conn.readline()
-                # print(f"[Serial] Raw data: {raw_data}")  # Debug: Print raw bytes
                 line = raw_data.decode('utf-8', errors='ignore').strip()
                 if line:
-                    # print(f"[Serial] Received line: {line}")
                     self.parse_and_update(line)
         except Exception as e:
             print(f"Error reading from serial port: {e}")
 
-    def parse_and_update(self, line):
-        """
-        Parses a line from the serial output and updates the latest LUX value.
-        """
+    def parse_float_or_na(self, val):
+        if val == 'N/A':
+            return None
         try:
-            # Remove ANSI escape sequences
+            return float(val)
+        except:
+            return None
+
+    def parse_and_update(self, line):
+        try:
+            # Remover secuencias ANSI
             ansi_escape = re.compile(r'\x1b\[[0-9;]*m')
             line_clean = ansi_escape.sub('', line)
-            # Use regex to match lines with LUX values
-            match = re.match(r'^(\d+\.\d+)\s+lux$', line_clean)
-            if match:
-                lux_value = float(match.group(1))
-                with data_lock:
-                    global latest_serial_lux
-                    latest_serial_lux = lux_value
-                # print(f"Updated latest serial LUX value: {lux_value}")
+
+            # Patrón para saturado con MUESTRA
+            saturado_pattern = re.compile(
+                r'^MUESTRA=(\d+),\s*SATURADO:\s*Lux=(-?\d+\.\d+),\s*FULL=(\d+),\s*IR=(\d+),\s*ITIME=(\d+),\s*GAIN=(\d+),\s*ATIME=([N/A\d\.]+),\s*AGAIN=([N/A\d\.]+),\s*CPL=([N/A\d\.]+)'
+            )
+            # Patrón para línea normal con MUESTRA
+            normal_pattern = re.compile(
+                r'^MUESTRA=(\d+),\s*LUX=([\d\.]+),\s*FULL=(\d+),\s*IR=(\d+),\s*ITIME=(\d+),\s*GAIN=(\d+),\s*ATIME=([N/A\d\.]+),\s*AGAIN=([N/A\d\.]+),\s*CPL=([N/A\d\.]+)'
+            )
+
+            match_saturado = saturado_pattern.search(line_clean)
+            match_normal = normal_pattern.search(line_clean)
+
+            muestra_value = None
+            lux_value = None
+            full = None
+            ir = None
+            itime = None
+            gain = None
+            atime = None
+            again = None
+            cpl = None
+
+            if match_saturado:
+                # Línea saturada
+                muestra_value = int(match_saturado.group(1))
+                lux_value = float(match_saturado.group(2))
+                full = int(match_saturado.group(3))
+                ir = int(match_saturado.group(4))
+                itime = int(match_saturado.group(5))
+                gain = int(match_saturado.group(6))
+                atime = self.parse_float_or_na(match_saturado.group(7))
+                again = self.parse_float_or_na(match_saturado.group(8))
+                cpl = self.parse_float_or_na(match_saturado.group(9))
+
+            elif match_normal:
+                # Línea normal
+                muestra_value = int(match_normal.group(1))
+                lux_value = float(match_normal.group(2))
+                full = int(match_normal.group(3))
+                ir = int(match_normal.group(4))
+                itime = int(match_normal.group(5))
+                gain = int(match_normal.group(6))
+                atime = self.parse_float_or_na(match_normal.group(7))
+                again = self.parse_float_or_na(match_normal.group(8))
+                cpl = self.parse_float_or_na(match_normal.group(9))
+
             else:
-                # Ignore lines that do not match
-                pass
+                # Línea no reconocida, ignorar
+                return
+
+            with data_lock:
+                global latest_muestra_id, latest_serial_lux, latest_full, latest_ir, latest_itime, latest_gain, latest_atime, latest_again, latest_cpl
+                latest_muestra_id = muestra_value
+                latest_serial_lux = lux_value
+                latest_full = full
+                latest_ir = ir
+                latest_itime = itime
+                latest_gain = gain
+                latest_atime = atime
+                latest_again = again
+                latest_cpl = cpl
+
         except Exception as e:
             print(f"Error parsing line '{line}': {e}")
 
@@ -210,7 +261,7 @@ class SerialLuxReader(threading.Thread):
 
 class BLELuxReader:
     """
-    Class to handle connecting to the BLE device and updating the latest LUX value.
+    Lector BLE que obtiene datos LUX del dispositivo BLE.
     """
     def __init__(self, device_uuid, data_in_uuid, data_out_uuid):
         self.device_uuid = device_uuid
@@ -219,9 +270,6 @@ class BLELuxReader:
         self.client = None
 
     async def connect(self):
-        """
-        Connects to the BLE device and sets up notifications.
-        """
         self.client = BleakClient(self.device_uuid)
         await self.client.connect()
         if not self.client.is_connected:
@@ -233,73 +281,51 @@ class BLELuxReader:
         # Start notifications
         await self.client.start_notify(self.data_out_uuid, self.notification_handler)
         print(f"Subscribed to BLE notifications on {self.data_out_uuid}.")
-
         return True
 
     async def disconnect(self):
-        """
-        Stops notifications and disconnects from the BLE device.
-        """
         if self.client and self.client.is_connected:
             await self.client.stop_notify(self.data_out_uuid)
             await self.client.disconnect()
             print(f"Disconnected from BLE device: {self.device_uuid}")
 
     async def send_command_periodically(self, command, interval):
-        """
-        Sends a command to the BLE device periodically.
-        """
         try:
             while True:
                 await self.client.write_gatt_char(self.data_in_uuid, command)
                 await asyncio.sleep(interval)
         except asyncio.CancelledError:
-            # Task was cancelled, exit gracefully
             pass
         except Exception as e:
             print(f"Error sending command: {e}")
 
     def notification_handler(self, sender, data):
-        """
-        Handles incoming notifications from the BLE Data Out characteristic.
-        Parses and updates the latest LUX value.
-        """
         try:
-            # Remove ANSI escape sequences if any
             ansi_escape = re.compile(r'\x1b\[[0-9;]*m')
             data_clean = ansi_escape.sub('', data.decode('utf-8', errors='ignore'))
-            # Attempt to extract the LUX value from the ASCII data
-            # Find the start (':') and end (';') of the ASCII string
             colon_index = data_clean.find(':')
             semicolon_index = data_clean.find(';', colon_index)
             if colon_index != -1 and semicolon_index != -1:
                 ascii_data = data_clean[colon_index+1:semicolon_index].strip()
-                # Use regex to find the LUX value
                 match = re.search(r'(\d+)\s*LUX', ascii_data)
                 if match:
                     lux_value = int(match.group(1))
                 else:
-                    # If 'LUX' is not present, extract digits directly
                     digits = ''.join(filter(str.isdigit, ascii_data))
                     if digits:
                         lux_value = int(digits)
                     else:
-                        print("No LUX value found in data.")
+                        print("No LUX value found in BLE data.")
                         return
                 with data_lock:
                     global latest_ble_lux
                     latest_ble_lux = lux_value
-                # print(f"Updated latest BLE LUX value: {lux_value}")
             else:
                 print("Colon ':' or semicolon ';' not found in BLE data.")
         except Exception as e:
             print(f"Error parsing BLE notification data: {e}")
 
     async def start_reading(self, command_interval=1):
-        """
-        Starts the BLE reading process.
-        """
-        # Start sending command periodically
         command = bytes([0x5E])
         self.send_command_task = asyncio.create_task(
             self.send_command_periodically(command, command_interval)
@@ -310,7 +336,6 @@ class BLELuxReader:
         self.send_command_task.cancel()
 
 async def main():
-    # Create instances of the loggers and readers
     logger = LuxLogger(log_file_path=LOG_FILE_PATH, polynomial_coefficients=POLYNOMIAL_COEFFICIENTS)
     logger.setup_csv()
 
@@ -326,7 +351,7 @@ async def main():
         data_out_uuid=DATA_OUT_UUID
     )
 
-    # Start serial reader thread
+    # Iniciar el lector serial
     serial_connected = serial_reader.connect()
     if serial_connected:
         serial_reader.start()
@@ -334,7 +359,7 @@ async def main():
         print("Serial reader failed to connect.")
         return
 
-    # Start BLE reader
+    # Iniciar el lector BLE
     ble_connected = await ble_reader.connect()
     if not ble_connected:
         print("BLE reader failed to connect.")
@@ -343,21 +368,32 @@ async def main():
         return
     await ble_reader.start_reading(command_interval=1)
 
-    # Periodically log the data
+    # Loguear datos periódicamente
     try:
         while True:
-            await asyncio.sleep(1)  # Adjust the interval as needed
+            await asyncio.sleep(1)
             with data_lock:
                 timestamp = time.time()
+                muestra_id = latest_muestra_id
                 ble_lux = latest_ble_lux
                 serial_lux = latest_serial_lux
-            processed_serial_lux = logger.process_serial_lux(serial_lux)
-            logger.log_data(timestamp, ble_lux, serial_lux)
-            print(f"Logged data at {timestamp}: BLE={ble_lux}, Serial={serial_lux}, Processed Serial={processed_serial_lux}")
+                full = latest_full
+                ir = latest_ir
+                itime = latest_itime
+                gain = latest_gain
+                atime = latest_atime
+                again = latest_again
+                cpl = latest_cpl
+
+            # Sólo loggeamos si ya recibimos al menos una línea con MUESTRA
+            if muestra_id is not None:
+                logger.log_data(muestra_id, timestamp, ble_lux, serial_lux, full, ir, itime, gain, atime, again, cpl)
+                print(f"MUESTRA={muestra_id}, Logged data at {timestamp}: BLE={ble_lux}, Serial={serial_lux}, FULL={full}, IR={ir}, ITIME={itime}, GAIN={gain}, ATIME={atime}, AGAIN={again}, CPL={cpl}")
+
     except KeyboardInterrupt:
         print("Interrupted by user.")
     finally:
-        # Stop both readers and close the logger
+        # Detener ambos lectores y cerrar el logger
         serial_reader.stop()
         serial_reader.join()
         await ble_reader.stop()
