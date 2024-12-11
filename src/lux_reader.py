@@ -41,7 +41,7 @@ import re
 from bleak import BleakClient
 
 # UUIDs for the UT383BT Device
-DEVICE_UUID = "5D769E40-0CCD-8741-F6C7-0A5D76800EEB"  # Replace with your device's UUID if different
+DEVICE_UUID = "F35544C1-2CF9-1C06-307B-3F9D1F8B5FBC"  # Replace with your device's UUID if different
 DATA_IN_UUID = "0000ff01-0000-1000-8000-00805f9b34fb"  # UUID for the Data In characteristic
 DATA_OUT_UUID = "0000ff02-0000-1000-8000-00805f9b34fb"  # UUID for the Data Out characteristic
 

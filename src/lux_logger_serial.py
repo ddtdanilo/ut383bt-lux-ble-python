@@ -41,7 +41,7 @@ import serial
 from bleak import BleakClient
 
 # BLE configuration
-BLE_DEVICE_UUID = "5D769E40-0CCD-8741-F6C7-0A5D76800EEB"  # Replace with your BLE device's UUID
+BLE_DEVICE_UUID = "F35544C1-2CF9-1C06-307B-3F9D1F8B5FBC"  # Replace with your BLE device's UUID
 DATA_IN_UUID = "0000ff01-0000-1000-8000-00805f9b34fb"     # BLE Data In characteristic UUID
 DATA_OUT_UUID = "0000ff02-0000-1000-8000-00805f9b34fb"    # BLE Data Out characteristic UUID
 
@@ -90,14 +90,38 @@ class LuxLogger:
             self.csv_file.close()
             print(f"Log file {self.log_file_path} closed.")
 
-    def process_serial_lux(self, serial_lux):
+    # def process_serial_lux(self, serial_lux):
+    #     """
+    #     Processes the Serial LUX value using a second-order polynomial model.
+    #     """
+    #     if serial_lux is None:
+    #         return None
+    #     a, b, c = self.coefficients
+    #     return a * serial_lux**2 + b * serial_lux + c
+    def process_serial_lux(self, x):
         """
-        Processes the Serial LUX value using a second-order polynomial model.
+        Predice el valor de BLE Lux usando un modelo lineal basado en rangos definidos por clusters.
+
+        Parámetros:
+            x (float): Valor de Serial Lux.
+
+        Retorna:
+            float: Valor predicho de BLE Lux.
         """
-        if serial_lux is None:
-            return None
-        a, b, c = self.coefficients
-        return a * serial_lux**2 + b * serial_lux + c
+        # Coeficientes e interceptos por rango
+        if 0.0 <= x <= 217.51:  # Cluster 1
+            coef = 2.2223
+            intercept = 16.0177
+        elif 217.51 <= x <= 671.25:  # Cluster 0
+            coef = 2.5976
+            intercept = -44.3843
+        elif 671.25 <= x <= 1155.8:  # Cluster 2
+            coef = -0.1316
+            intercept = 1686.7994
+        else:
+            raise ValueError("El valor de Serial Lux está fuera de los rangos definidos por los clusters.")
+
+        return coef * x + intercept
 
     def log_data(self, timestamp, ble_lux, serial_lux):
         processed_serial_lux = self.process_serial_lux(serial_lux)
