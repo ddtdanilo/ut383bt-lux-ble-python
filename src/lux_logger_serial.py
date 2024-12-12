@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Synchronized Lux Logger for BLE and Serial Sensors
-==================================================
+Synchronized Lux Logger for BLE and Serial Sensors + Real-Time Plot + Error Bars for BLE
+=======================================================================================
 
 Este script:
-- Lee datos LUX desde un dispositivo BLE.
-- Lee datos LUX desde un sensor serial (que imprime línea con MUESTRA, LUX, FULL, IR, ITIME, GAIN, ATIME, AGAIN, CPL).
-- Las líneas seriales pueden indicar saturación con SATURADO y campos N/A.
-- Procesa el valor serial_lux con un modelo lineal por rangos.
-- Registra todo en un CSV.
-- El número de muestra (MUESTRA) ahora se extrae directamente de la línea serial, no se genera internamente.
+- Lee datos LUX desde BLE.
+- Lee datos LUX desde Serial (MUESTRA, LUX, FULL, ITIME, GAIN, etc.).
+- Procesa el lux serial y loguea en CSV.
+- Grafica en tiempo real vs tiempo (timestamp):
+  - BLE: un solo color (azul), con barras de error según la precisión del UT383/UT383BT.
+  - Serial: marcador 'x', color según (ITIME, GAIN) usando color_map.
 
-Requisitos previos:
+Requisitos:
 - bleak
 - pySerial
-
-Asegúrate de reemplazar los UUID, el puerto serial y otros ajustes según tu hardware.
+- matplotlib
 """
 
 import asyncio
@@ -28,10 +27,13 @@ import re
 import serial
 from bleak import BleakClient
 
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+
 # BLE configuration
-BLE_DEVICE_UUID = "F35544C1-2CF9-1C06-307B-3F9D1F8B5FBC"  # Reemplaza con el UUID de tu dispositivo BLE
-DATA_IN_UUID = "0000ff01-0000-1000-8000-00805f9b34fb"    # Característica BLE Data In
-DATA_OUT_UUID = "0000ff02-0000-1000-8000-00805f9b34fb"   # Característica BLE Data Out
+BLE_DEVICE_UUID = "F35544C1-2CF9-1C06-307B-3F9D1F8B5FBC"  # Reemplaza con tu BLE device UUID
+DATA_IN_UUID = "0000ff01-0000-1000-8000-00805f9b34fb"
+DATA_OUT_UUID = "0000ff02-0000-1000-8000-00805f9b34fb"
 
 # Serial port configuration
 SERIAL_PORT = "/dev/tty.usbserial-A50285BI"  # Reemplaza con tu puerto serial
@@ -43,7 +45,7 @@ LOG_DIR = "logs"
 LOG_FILE_NAME = "synchronized_lux_data.csv"
 LOG_FILE_PATH = os.path.join(LOG_DIR, LOG_FILE_NAME)
 
-# Coeficientes para procesar el lux serial (modelo ya definido)
+# Coeficientes para procesar el lux serial (modelo)
 POLYNOMIAL_COEFFICIENTS = (0.002, 1.3, -5.0)
 
 # Variables compartidas
@@ -60,10 +62,26 @@ latest_cpl = None
 
 data_lock = threading.Lock()
 
+# Datos para plot:
+# ble_data y serial_data: (timestamp, lux, itime, gain)
+ble_data = []
+serial_data = []
+
+# Diccionario para mapear (ITIME, GAIN) a colores para el Serial
+color_map = {
+    (0, 0): 'blue',
+    (0, 16): 'green',
+    (0, 32): 'red',
+    (0, 48): 'cyan',
+    (1, 0): 'magenta',
+    (1, 16): 'yellow',
+    (1, 32): 'orange',
+    (1, 48): 'purple',
+    (2, 0): 'black',
+    # Agrega más si es necesario
+}
+
 class LuxLogger:
-    """
-    Clase para registrar datos en CSV con columnas adicionales.
-    """
     def __init__(self, log_file_path, polynomial_coefficients):
         self.log_file_path = log_file_path
         self.csv_file = None
@@ -96,19 +114,15 @@ class LuxLogger:
             print(f"Log file {self.log_file_path} closed.")
 
     def process_serial_lux(self, x):
-        """
-        Procesa el lux serial con un modelo lineal por rangos.
-        Si x es None o fuera de rango, retorna None.
-        """
         if x is None:
             return None
-        if 0.0 <= x <= 217.51:  # Cluster 1
+        if 0.0 <= x <= 217.51:
             coef = 2.2223
             intercept = 16.0177
-        elif 217.51 <= x <= 671.25:  # Cluster 0
+        elif 217.51 <= x <= 671.25:
             coef = 2.5976
             intercept = -44.3843
-        elif 671.25 <= x <= 1155.8:  # Cluster 2
+        elif 671.25 <= x <= 1155.8:
             coef = -0.1316
             intercept = 1686.7994
         else:
@@ -135,9 +149,6 @@ class LuxLogger:
             self.csv_file.flush()
 
 class SerialLuxReader(threading.Thread):
-    """
-    Hilo para leer del puerto serial y parsear tanto líneas normales como saturadas, incluyendo MUESTRA.
-    """
     def __init__(self, port, baud_rate, timeout):
         threading.Thread.__init__(self)
         self.port = port
@@ -187,15 +198,12 @@ class SerialLuxReader(threading.Thread):
 
     def parse_and_update(self, line):
         try:
-            # Remover secuencias ANSI
             ansi_escape = re.compile(r'\x1b\[[0-9;]*m')
             line_clean = ansi_escape.sub('', line)
 
-            # Patrón para saturado con MUESTRA
             saturado_pattern = re.compile(
                 r'^MUESTRA=(\d+),\s*SATURADO:\s*Lux=(-?\d+\.\d+),\s*FULL=(\d+),\s*IR=(\d+),\s*ITIME=(\d+),\s*GAIN=(\d+),\s*ATIME=([N/A\d\.]+),\s*AGAIN=([N/A\d\.]+),\s*CPL=([N/A\d\.]+)'
             )
-            # Patrón para línea normal con MUESTRA
             normal_pattern = re.compile(
                 r'^MUESTRA=(\d+),\s*LUX=([\d\.]+),\s*FULL=(\d+),\s*IR=(\d+),\s*ITIME=(\d+),\s*GAIN=(\d+),\s*ATIME=([N/A\d\.]+),\s*AGAIN=([N/A\d\.]+),\s*CPL=([N/A\d\.]+)'
             )
@@ -214,7 +222,6 @@ class SerialLuxReader(threading.Thread):
             cpl = None
 
             if match_saturado:
-                # Línea saturada
                 muestra_value = int(match_saturado.group(1))
                 lux_value = float(match_saturado.group(2))
                 full = int(match_saturado.group(3))
@@ -226,7 +233,6 @@ class SerialLuxReader(threading.Thread):
                 cpl = self.parse_float_or_na(match_saturado.group(9))
 
             elif match_normal:
-                # Línea normal
                 muestra_value = int(match_normal.group(1))
                 lux_value = float(match_normal.group(2))
                 full = int(match_normal.group(3))
@@ -236,9 +242,7 @@ class SerialLuxReader(threading.Thread):
                 atime = self.parse_float_or_na(match_normal.group(7))
                 again = self.parse_float_or_na(match_normal.group(8))
                 cpl = self.parse_float_or_na(match_normal.group(9))
-
             else:
-                # Línea no reconocida, ignorar
                 return
 
             with data_lock:
@@ -260,9 +264,6 @@ class SerialLuxReader(threading.Thread):
         self.stop_event.set()
 
 class BLELuxReader:
-    """
-    Lector BLE que obtiene datos LUX del dispositivo BLE.
-    """
     def __init__(self, device_uuid, data_in_uuid, data_out_uuid):
         self.device_uuid = device_uuid
         self.data_in_uuid = data_in_uuid
@@ -278,7 +279,6 @@ class BLELuxReader:
 
         print(f"Connected to BLE device: {self.device_uuid}")
 
-        # Start notifications
         await self.client.start_notify(self.data_out_uuid, self.notification_handler)
         print(f"Subscribed to BLE notifications on {self.data_out_uuid}.")
         return True
@@ -335,6 +335,47 @@ class BLELuxReader:
     async def stop(self):
         self.send_command_task.cancel()
 
+def ble_error(lx):
+    # Cálculo del error para BLE según las especificaciones:
+    # 0~9999Lux: ±(4%+8)
+    # ≥10000Lux & <100000Lux: ±(5%+10)
+    # ≥100000Lux: ±(5%+10)
+    if lx < 10000:
+        return lx*0.04 + 8
+    elif lx < 100000:
+        return lx*0.05 + 10
+    else:
+        return lx*0.05 + 10
+
+plt.ion()
+fig, ax = plt.subplots()
+
+def update_plot(frame):
+    ax.clear()
+
+    # BLE data: graficar con error bars, un solo color (blue), marcador 'o'
+    if ble_data:
+        ble_times = [d[0] for d in ble_data]
+        ble_luxes = [d[1] for d in ble_data]
+        ble_errors = [ble_error(lx) for lx in ble_luxes]
+        ax.errorbar(ble_times, ble_luxes, yerr=ble_errors, fmt='o', color='blue', label='BLE', capsize=3)
+
+    # Serial data: marcador 'x', color según (itime,gain)
+    if serial_data:
+        serial_times = [d[0] for d in serial_data]
+        serial_luxes = [d[1] for d in serial_data]
+        serial_itimes = [d[2] for d in serial_data]
+        serial_gains = [d[3] for d in serial_data]
+        serial_colors = [color_map.get((it,g), 'gray') for it,g in zip(serial_itimes, serial_gains)]
+        ax.scatter(serial_times, serial_luxes, marker='x', c=serial_colors, label='Serial')
+
+    ax.set_xlabel('Timestamp (s)')
+    ax.set_ylabel('LUX')
+    ax.set_title('LUX en tiempo real (BLE con error bars, Serial con colores ITIME/GAIN)')
+    ax.legend()
+
+ani = animation.FuncAnimation(fig, update_plot, interval=1000, cache_frame_data=False)
+
 async def main():
     logger = LuxLogger(log_file_path=LOG_FILE_PATH, polynomial_coefficients=POLYNOMIAL_COEFFICIENTS)
     logger.setup_csv()
@@ -351,7 +392,6 @@ async def main():
         data_out_uuid=DATA_OUT_UUID
     )
 
-    # Iniciar el lector serial
     serial_connected = serial_reader.connect()
     if serial_connected:
         serial_reader.start()
@@ -359,7 +399,6 @@ async def main():
         print("Serial reader failed to connect.")
         return
 
-    # Iniciar el lector BLE
     ble_connected = await ble_reader.connect()
     if not ble_connected:
         print("BLE reader failed to connect.")
@@ -368,7 +407,6 @@ async def main():
         return
     await ble_reader.start_reading(command_interval=1)
 
-    # Loguear datos periódicamente
     try:
         while True:
             await asyncio.sleep(1)
@@ -385,15 +423,28 @@ async def main():
                 again = latest_again
                 cpl = latest_cpl
 
-            # Sólo loggeamos si ya recibimos al menos una línea con MUESTRA
             if muestra_id is not None:
                 logger.log_data(muestra_id, timestamp, ble_lux, serial_lux, full, ir, itime, gain, atime, again, cpl)
                 print(f"MUESTRA={muestra_id}, Logged data at {timestamp}: BLE={ble_lux}, Serial={serial_lux}, FULL={full}, IR={ir}, ITIME={itime}, GAIN={gain}, ATIME={atime}, AGAIN={again}, CPL={cpl}")
 
+                # Agregar datos a las listas para plot
+                # BLE (un solo color y error bars)
+                if ble_lux is not None:
+                    # No necesitamos (itime,gain) para BLE ya que el color es fijo,
+                    # pero guardamos itime,gain si el usuario quisiera analizarlos.
+                    # De todos modos, se guardan por consistencia.
+                    ble_data.append((timestamp, ble_lux, itime, gain))
+
+                # Serial (color por itime,gain)
+                if serial_lux is not None and itime is not None and gain is not None:
+                    serial_data.append((timestamp, serial_lux, itime, gain))
+
+            # Permite que matplotlib actualice la gráfica
+            plt.pause(0.01)
+
     except KeyboardInterrupt:
         print("Interrupted by user.")
     finally:
-        # Detener ambos lectores y cerrar el logger
         serial_reader.stop()
         serial_reader.join()
         await ble_reader.stop()
