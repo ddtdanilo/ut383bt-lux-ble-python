@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Synchronized Lux Logger for BLE and Serial Sensors + Real-Time Plot + Error Bars for BLE
-=======================================================================================
+Synchronized Lux Logger for BLE and Serial Sensors + Real-Time Plot + Error Bars
+===============================================================================
 
 Este script:
-- Lee datos LUX desde BLE.
-- Lee datos LUX desde Serial (MUESTRA, LUX, FULL, ITIME, GAIN, etc.).
+- Lee datos LUX desde BLE y desde Serial (TSL2591).
 - Procesa el lux serial y loguea en CSV.
 - Grafica en tiempo real vs tiempo (timestamp):
-  - BLE: un solo color (azul), con barras de error según la precisión del UT383/UT383BT.
-  - Serial: marcador 'x', color según (ITIME, GAIN) usando color_map.
+  - BLE: un solo color (azul), con barras de error según UT383/UT383BT (no graficar -1).
+  - Serial (TSL2591): marcador 'x', color según (ITIME, GAIN), con barras de error ±10%+5 lux (no graficar -1).
 
 Requisitos:
 - bleak
@@ -31,12 +30,12 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 
 # BLE configuration
-BLE_DEVICE_UUID = "F35544C1-2CF9-1C06-307B-3F9D1F8B5FBC"  # Reemplaza con tu BLE device UUID
+BLE_DEVICE_UUID = "F35544C1-2CF9-1C06-307B-3F9D1F8B5FBC"  # Reemplazar con tu BLE device UUID
 DATA_IN_UUID = "0000ff01-0000-1000-8000-00805f9b34fb"
 DATA_OUT_UUID = "0000ff02-0000-1000-8000-00805f9b34fb"
 
 # Serial port configuration
-SERIAL_PORT = "/dev/tty.usbserial-A50285BI"  # Reemplaza con tu puerto serial
+SERIAL_PORT = "/dev/tty.usbserial-A50285BI"  # Reemplazar con tu puerto serial
 BAUD_RATE = 115200
 SERIAL_TIMEOUT = 1
 
@@ -45,7 +44,7 @@ LOG_DIR = "logs"
 LOG_FILE_NAME = "synchronized_lux_data.csv"
 LOG_FILE_PATH = os.path.join(LOG_DIR, LOG_FILE_NAME)
 
-# Coeficientes para procesar el lux serial (modelo)
+# Coeficientes para procesar el lux serial
 POLYNOMIAL_COEFFICIENTS = (0.002, 1.3, -5.0)
 
 # Variables compartidas
@@ -62,23 +61,47 @@ latest_cpl = None
 
 data_lock = threading.Lock()
 
-# Datos para plot:
-# ble_data y serial_data: (timestamp, lux, itime, gain)
+# Datos para plot (timestamp, lux, itime, gain)
 ble_data = []
 serial_data = []
 
-# Diccionario para mapear (ITIME, GAIN) a colores para el Serial
+# Map de colores para todas las combinaciones (ITIME 0-5, GAIN {0,16,32,48})
 color_map = {
-    (0, 0): 'blue',
+    # ITIME=0 (100ms)
+    (0, 0): 'red',
     (0, 16): 'green',
-    (0, 32): 'red',
+    (0, 32): 'blue',
     (0, 48): 'cyan',
+
+    # ITIME=1 (200ms)
     (1, 0): 'magenta',
     (1, 16): 'yellow',
     (1, 32): 'orange',
     (1, 48): 'purple',
+
+    # ITIME=2 (300ms)
     (2, 0): 'black',
-    # Agrega más si es necesario
+    (2, 16): 'brown',
+    (2, 32): 'pink',
+    (2, 48): 'lime',
+
+    # ITIME=3 (400ms)
+    (3, 0): 'olive',
+    (3, 16): 'teal',
+    (3, 32): 'navy',
+    (3, 48): 'gold',
+
+    # ITIME=4 (500ms)
+    (4, 0): 'darkred',
+    (4, 16): 'darkgreen',
+    (4, 32): 'darkblue',
+    (4, 48): 'darkcyan',
+
+    # ITIME=5 (600ms)
+    (5, 0): 'darkmagenta',
+    (5, 16): 'chocolate',
+    (5, 32): 'darkorange',
+    (5, 48): 'darkviolet'
 }
 
 class LuxLogger:
@@ -336,10 +359,7 @@ class BLELuxReader:
         self.send_command_task.cancel()
 
 def ble_error(lx):
-    # Cálculo del error para BLE según las especificaciones:
-    # 0~9999Lux: ±(4%+8)
-    # ≥10000Lux & <100000Lux: ±(5%+10)
-    # ≥100000Lux: ±(5%+10)
+    # Error BLE (UT383/UT383BT):
     if lx < 10000:
         return lx*0.04 + 8
     elif lx < 100000:
@@ -347,31 +367,35 @@ def ble_error(lx):
     else:
         return lx*0.05 + 10
 
+def serial_error(lx):
+    # Error Serial (TSL2591): ±10% + 5 lux (heurístico)
+    return lx*0.10 + 5
+
 plt.ion()
 fig, ax = plt.subplots()
 
 def update_plot(frame):
     ax.clear()
 
-    # BLE data: graficar con error bars, un solo color (blue), marcador 'o'
-    if ble_data:
-        ble_times = [d[0] for d in ble_data]
-        ble_luxes = [d[1] for d in ble_data]
+    # BLE data: error bars, azul, ignorar -1
+    ble_filtered = [(t,lx,it,g) for (t,lx,it,g) in ble_data if lx != -1.0]
+    if ble_filtered:
+        ble_times = [d[0] for d in ble_filtered]
+        ble_luxes = [d[1] for d in ble_filtered]
         ble_errors = [ble_error(lx) for lx in ble_luxes]
         ax.errorbar(ble_times, ble_luxes, yerr=ble_errors, fmt='o', color='blue', label='BLE', capsize=3)
 
-    # Serial data: marcador 'x', color según (itime,gain)
-    if serial_data:
-        serial_times = [d[0] for d in serial_data]
-        serial_luxes = [d[1] for d in serial_data]
-        serial_itimes = [d[2] for d in serial_data]
-        serial_gains = [d[3] for d in serial_data]
-        serial_colors = [color_map.get((it,g), 'gray') for it,g in zip(serial_itimes, serial_gains)]
-        ax.scatter(serial_times, serial_luxes, marker='x', c=serial_colors, label='Serial')
+    # Serial data: marcador 'x', color (itime,gain), error bars, ignorar -1
+    serial_filtered = [(t,lx,it,g) for (t,lx,it,g) in serial_data if lx != -1.0]
+    if serial_filtered:
+        for (t,lx,it,g) in serial_filtered:
+            c = color_map.get((it,g), 'gray')
+            err = serial_error(lx)
+            ax.errorbar(t, lx, yerr=err, fmt='x', color=c, capsize=3)
 
     ax.set_xlabel('Timestamp (s)')
     ax.set_ylabel('LUX')
-    ax.set_title('LUX en tiempo real (BLE con error bars, Serial con colores ITIME/GAIN)')
+    ax.set_title('LUX en tiempo real (BLE y Serial con barras de error, sin saturaciones)')
     ax.legend()
 
 ani = animation.FuncAnimation(fig, update_plot, interval=1000, cache_frame_data=False)
@@ -427,19 +451,14 @@ async def main():
                 logger.log_data(muestra_id, timestamp, ble_lux, serial_lux, full, ir, itime, gain, atime, again, cpl)
                 print(f"MUESTRA={muestra_id}, Logged data at {timestamp}: BLE={ble_lux}, Serial={serial_lux}, FULL={full}, IR={ir}, ITIME={itime}, GAIN={gain}, ATIME={atime}, AGAIN={again}, CPL={cpl}")
 
-                # Agregar datos a las listas para plot
-                # BLE (un solo color y error bars)
-                if ble_lux is not None:
-                    # No necesitamos (itime,gain) para BLE ya que el color es fijo,
-                    # pero guardamos itime,gain si el usuario quisiera analizarlos.
-                    # De todos modos, se guardan por consistencia.
+                # Agregar datos BLE (si no es -1)
+                if ble_lux is not None:  
                     ble_data.append((timestamp, ble_lux, itime, gain))
 
-                # Serial (color por itime,gain)
+                # Agregar datos Serial (si no es -1)
                 if serial_lux is not None and itime is not None and gain is not None:
                     serial_data.append((timestamp, serial_lux, itime, gain))
 
-            # Permite que matplotlib actualice la gráfica
             plt.pause(0.01)
 
     except KeyboardInterrupt:
