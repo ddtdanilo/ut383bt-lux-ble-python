@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and compatible devices
+    url: https://github.com/ddtdanilo/ut383bt-lux-ble-python/discussions
+    about: Ask setup questions and share sanitized device observations.
+  - name: Private security report
+    url: https://github.com/ddtdanilo/ut383bt-lux-ble-python/security/advisories/new
+    about: Report security or privacy issues privately.

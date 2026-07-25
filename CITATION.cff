@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If this software supports your work, please cite it."
+title: "UT383BT Lux over BLE"
+type: software
+authors:
+  - family-names: "Díaz Tarascó"
+    given-names: "Danilo"
+repository-code: "https://github.com/ddtdanilo/ut383bt-lux-ble-python"
+license: WTFPL
+version: 1.0.0
+date-released: 2026-07-25
