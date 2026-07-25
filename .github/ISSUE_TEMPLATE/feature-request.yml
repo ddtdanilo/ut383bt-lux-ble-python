@@ -1,0 +1,32 @@
+name: Feature request
+description: Propose a focused enhancement.
+title: "[Enhancement]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user need is not currently met?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the smallest useful solution.
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and privacy
+      description: Which platforms or meter variants are affected, and what data is involved?
+  - type: checkboxes
+    id: testability
+    attributes:
+      label: Testability
+      options:
+        - label: The proposal can be tested in CI without live Bluetooth hardware.
+          required: true

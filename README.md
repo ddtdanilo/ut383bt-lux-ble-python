@@ -1,128 +1,190 @@
+# UT383BT Lux over BLE
 
-# UT383BT-LUX-BLE-PYTHON
+[![CI](https://github.com/ddtdanilo/ut383bt-lux-ble-python/actions/workflows/quality.yml/badge.svg)](https://github.com/ddtdanilo/ut383bt-lux-ble-python/actions/workflows/quality.yml)
+[![CodeQL](https://github.com/ddtdanilo/ut383bt-lux-ble-python/actions/workflows/codeql.yml/badge.svg)](https://github.com/ddtdanilo/ut383bt-lux-ble-python/actions/workflows/codeql.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab.svg)](https://www.python.org/)
+[![License: WTFPL](https://img.shields.io/badge/license-WTFPL-blue.svg)](LICENSE)
 
-A Python project for interacting with the Uni-T UT383BT Bluetooth LUX meter using BLE (Bluetooth Low Energy). This project enables real-time retrieval and optional logging of light intensity values (in LUX) from the UT383BT device. It uses the `bleak` library for cross-platform BLE communication, specifically tested on macOS.
+A tested Python library and command-line tool for discovering, reading, and
+logging illuminance measurements from a **UNI-T UT383BT** over Bluetooth Low
+Energy.
 
-## Features
+The project is hardware-independent in CI: parsing, CSV output, BLE lifecycle,
+error handling, and the CLI are tested with deterministic fakes. A physical
+meter is required only for real discovery and capture.
 
-- Connects to the Uni-T UT383BT LUX meter via BLE.
-- Sends a command to enable notifications for LUX values.
-- Subscribes to the `Data Out` characteristic to receive real-time measurements.
-- Logs retrieved LUX values to a file for later analysis (optional).
-- Modular structure for extensibility and testing.
+> [!NOTE]
+> The BLE request and notification format are based on observation of one
+> UT383BT. They are not documented in the public product manual and may vary
+> across firmware revisions.
 
-## Getting Started
+## Highlights
 
-### Prerequisites
-
-1. Python 3.8 or higher.
-2. Install the required Python packages listed in `requirements.txt`.
-
-### Setting Up a Virtual Environment
-
-It is recommended to use a Python virtual environment to manage dependencies for this project.
-
-#### Steps to Create and Activate a Virtual Environment:
-
-1. **Create the Virtual Environment:**
-   ```bash
-   python3 -m venv venv
-   ```
-
-2. **Activate the Virtual Environment:**
-   - On macOS/Linux:
-     ```bash
-     source venv/bin/activate
-     ```
-   - On Windows:
-     ```bash
-     .\venv\Scripts\activate
-     ```
-
-3. **Install Dependencies:**
-   Once the virtual environment is activated, install the required packages:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **Deactivate the Virtual Environment:**
-   When you're done, deactivate the environment:
-   ```bash
-   deactivate
-   ```
-
-### Tested Environment
-
-- **OS**: macOS (tested with BLE using LightBlue for initial device exploration).
-- **Device**: Uni-T UT383BT Bluetooth LUX meter.
-- **Python Library**: `bleak` (for BLE communication).
-
-### Folder Structure
-
-```plaintext
-ut383bt-lux-ble-python/
-├── README.md              # Project documentation
-├── LICENSE                # License for the project
-├── requirements.txt       # Python dependencies
-├── src/                   # Source code
-│   ├── __init__.py        # Package initialization
-│   ├── lux_reader.py      # Reads LUX values via BLE
-│   ├── lux_logger.py      # Logs LUX values to a file
-│   └── utils.py           # Utility functions (optional)
-├── logs/                  # Log files
-│   └── lux_data_example.log # Example of logged LUX data
-└── tests/                 # Unit tests
-    ├── __init__.py        # Package initialization
-    └── test_lux_reader.py # Unit tests for lux_reader.py
-```
-
-## Usage
-
-### 1. Reading LUX Values
-Run the `lux_reader.py` script to connect to the UT383BT device and print LUX values to the console:
-```bash
-python src/lux_reader.py
-```
-
-### 2. Logging LUX Values
-Run the `lux_logger.py` script to log LUX values to a file in the `logs` directory:
-```bash
-python src/lux_logger.py
-```
-
-### 3. Example Log File
-After running `lux_logger.py`, a file like `logs/lux_data_example.log` will be generated with entries similar to:
-```plaintext
-75LUX
-80LUX
-85LUX
-```
-
-### 4. Running Tests
-Use the `tests` folder to validate the functionality of your scripts:
-```bash
-python -m unittest discover tests
-```
+- Cross-platform BLE through [Bleak](https://bleak.readthedocs.io/)
+- No hard-coded device address or macOS UUID
+- Explicit `scan`, `read`, `log`, and offline `parse` commands
+- Configurable characteristic UUIDs, command, interval, duration, and write mode
+- UTC ISO 8601 and Unix timestamps in CSV output
+- Malformed notifications are isolated without stopping a capture
+- Guaranteed notification cleanup and BLE disconnection
+- Python 3.11-3.14 CI, 97%+ branch coverage, Ruff, CodeQL, and dependency audits
 
 ## Requirements
 
-All dependencies are listed in `requirements.txt`. Install them using:
+- Python 3.11 or newer
+- Bluetooth Low Energy hardware enabled on the host
+- A UNI-T UT383BT meter with Bluetooth enabled
+- OS permission for the terminal or Python process to use Bluetooth
+
+Bleak 3 supports macOS, Windows 11, Linux with a compatible BlueZ stack, and
+selected Android environments. This project was originally explored on macOS;
+device identifiers differ by platform.
+
+## Install
+
+From the repository:
+
 ```bash
-pip install -r requirements.txt
+git clone https://github.com/ddtdanilo/ut383bt-lux-ble-python.git
+cd ut383bt-lux-ble-python
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install .
 ```
 
-### Example `requirements.txt`:
-```plaintext
-bleak==0.20.2
+For development:
+
+```bash
+python -m pip install --editable ".[dev]"
 ```
 
-## How It Works
+## Quick start
 
-1. **Connection**: The script connects to the UT383BT via BLE using its UUID or MAC address.
-2. **Command to Enable Notifications**: A specific command (`0x5E`) is written to the `Data In` characteristic.
-3. **Receiving Notifications**: LUX values are sent as notifications via the `Data Out` characteristic.
-4. **Logging (Optional)**: The values are logged to a file for later use.
+### 1. Discover the meter
 
-## Contributions
+```bash
+ut383bt scan --timeout 8
+```
 
-Contributions are welcome! Feel free to fork the repository, open an issue, or submit a pull request.
+Example:
+
+```text
+NAME        IDENTIFIER                            RSSI
+UT383BT     11111111-2222-3333-4444-555555555555  -48
+```
+
+Use the reported identifier exactly. Linux and Windows commonly show a Bluetooth
+address; macOS normally shows a UUID.
+
+### 2. Read measurements
+
+```bash
+ut383bt read \
+  --device "11111111-2222-3333-4444-555555555555" \
+  --duration 30
+```
+
+### 3. Log to CSV
+
+```bash
+ut383bt log \
+  --device "11111111-2222-3333-4444-555555555555" \
+  --duration 60 \
+  --output measurements/lux.csv
+```
+
+CSV format:
+
+```csv
+timestamp_utc,epoch_seconds,lux
+2026-07-25T06:30:00.123456+00:00,1784961000.123456,250
+```
+
+### 4. Parse a captured notification offline
+
+```bash
+ut383bt parse "3a323530204c55583b"
+```
+
+That hexadecimal payload represents `:250 LUX;`.
+
+All commands are also available through:
+
+```bash
+python -m ut383bt --help
+```
+
+## Observed protocol
+
+| Purpose | UUID / value |
+| --- | --- |
+| Data In characteristic | `0000ff01-0000-1000-8000-00805f9b34fb` |
+| Data Out characteristic | `0000ff02-0000-1000-8000-00805f9b34fb` |
+| Periodic request | `0x5E` |
+| Default request interval | 1 second |
+| Observed payload shape | ASCII content between `:` and `;`, containing an integer lux value |
+
+The CLI uses writes without response by default and specifies that choice
+explicitly, as recommended for modern Bleak. If a firmware revision exposes only
+acknowledged writes, add `--write-with-response`.
+
+See [Protocol notes](docs/PROTOCOL.md) before changing UUIDs or parser behavior.
+
+## Library usage
+
+```python
+import asyncio
+
+from ut383bt import UT383BTClient
+
+
+def display(measurement):
+    print(measurement.captured_at.isoformat(), measurement.lux)
+
+
+async def main():
+    client = UT383BTClient("YOUR-BLE-IDENTIFIER")
+    await client.collect(duration=30, callback=display)
+
+
+asyncio.run(main())
+```
+
+The complete public surface is documented in [API reference](docs/API.md).
+
+## Development
+
+```bash
+python -m pip install --editable ".[dev]"
+ruff check .
+ruff format --check .
+pytest
+python -m build
+pip-audit
+```
+
+No test connects to a real Bluetooth peripheral. Hardware verification is an
+explicit manual step described in [Contributing](CONTRIBUTING.md).
+
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md)
+- [API reference](docs/API.md)
+- [Protocol notes](docs/PROTOCOL.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [Privacy](PRIVACY.md)
+- [Security](SECURITY.md)
+- [Contributing](CONTRIBUTING.md)
+- [Support](SUPPORT.md)
+
+## Privacy and safety
+
+BLE scans expose nearby device names and identifiers to the local process. CSV
+logs reveal when and where measurements were taken. Review
+[`PRIVACY.md`](PRIVACY.md), avoid publishing identifiers or sensitive logs, and
+never use this utility as the sole input to a safety-critical lighting system.
+
+## License
+
+Released under the [WTFPL, Version 2](LICENSE), preserving the license declared
+by the original scripts.

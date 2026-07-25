@@ -1,0 +1,114 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ut383bt-lux-ble"
+version = "1.0.0"
+description = "Read and log UNI-T UT383BT illuminance measurements over Bluetooth Low Energy."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "WTFPL"
+authors = [
+  { name = "Danilo Díaz Tarascó" },
+]
+keywords = ["ble", "bluetooth", "illuminance", "lux", "ut383bt"]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: MacOS :: MacOS X",
+  "Operating System :: Microsoft :: Windows :: Windows 11",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Scientific/Engineering",
+]
+dependencies = [
+  "bleak>=3.0.2,<4",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.3.0,<2",
+  "pip-audit>=2.10.0,<3",
+  "pytest>=9.0.0,<10",
+  "pytest-cov>=7.0.0,<8",
+  "ruff>=0.16.0,<0.17",
+]
+
+[project.scripts]
+ut383bt = "ut383bt.cli:entrypoint"
+
+[project.urls]
+Changelog = "https://github.com/ddtdanilo/ut383bt-lux-ble-python/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/ddtdanilo/ut383bt-lux-ble-python#readme"
+Issues = "https://github.com/ddtdanilo/ut383bt-lux-ble-python/issues"
+Repository = "https://github.com/ddtdanilo/ut383bt-lux-ble-python"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = [
+  "--strict-config",
+  "--strict-markers",
+  "--cov=ut383bt",
+  "--cov-branch",
+  "--cov-report=term-missing",
+  "--cov-fail-under=95",
+]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+omit = ["src/ut383bt/__main__.py"]
+
+[tool.coverage.report]
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "if __name__ == .__main__.:",
+  "def entrypoint",
+]
+show_missing = true
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+  "A",
+  "ARG",
+  "ASYNC",
+  "B",
+  "BLE",
+  "C4",
+  "DTZ",
+  "E",
+  "F",
+  "I",
+  "N",
+  "PERF",
+  "PIE",
+  "PL",
+  "PTH",
+  "RUF",
+  "SIM",
+  "UP",
+  "W",
+]
+ignore = ["PLR2004"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ARG001", "PLR2004", "SLF001"]
+
+[tool.ruff.format]
+docstring-code-format = true
+quote-style = "double"

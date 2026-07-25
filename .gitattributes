@@ -1,0 +1,11 @@
+* text=auto eol=lf
+
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.csv text eol=lf
+*.md diff=markdown
+*.py diff=python
+
+*.jpg binary
+*.png binary
+*.pdf binary
