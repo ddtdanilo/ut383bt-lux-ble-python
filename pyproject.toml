@@ -37,7 +37,7 @@ dev = [
   "pip-audit>=2.10.0,<3",
   "pytest>=9.0.0,<10",
   "pytest-cov>=7.0.0,<8",
-  "ruff>=0.16.0,<0.17",
+  "ruff>=0.16.0,<0.18",
 ]
 
 [project.scripts]
